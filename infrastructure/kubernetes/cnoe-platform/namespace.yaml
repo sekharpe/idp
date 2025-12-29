@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cnoe-platform
+  labels:
+    name: cnoe-platform
+    platform: cnoe

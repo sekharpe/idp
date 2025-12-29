@@ -1,0 +1,61 @@
+# CNOE Platform Services - Multi-service Container
+# This container runs essential CNOE services for the IDP
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install base packages
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    jq \
+    python3 \
+    python3-pip \
+    nginx \
+    supervisor \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install kubectl
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl \
+    && rm kubectl
+
+# Install helm
+RUN curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Install ArgoCD CLI
+RUN curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 \
+    && chmod +x /usr/local/bin/argocd
+
+# Create app directories
+RUN mkdir -p /app/portal /app/docs /app/api
+
+# Create non-root user
+RUN groupadd -g 1001 cnoe && \
+    useradd -r -u 1001 -g cnoe cnoe
+
+# Setup supervisor configuration
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Copy application files
+COPY portal/ /app/portal/
+COPY docs/ /app/docs/
+COPY api/ /app/api/
+
+# Set permissions
+RUN chown -R cnoe:cnoe /app
+
+# Expose ports
+# 8080 - API Gateway
+# 8081 - Portal UI
+# 8082 - Documentation
+EXPOSE 8080 8081 8082
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+# Use supervisor to manage multiple services
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

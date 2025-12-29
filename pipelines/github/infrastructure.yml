@@ -1,0 +1,180 @@
+name: Infrastructure Deployment
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'infrastructure/**'
+      - 'gitops/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'infrastructure/**'
+      - 'gitops/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+
+env:
+  AZURE_RESOURCE_GROUP: cnoe-${{ github.event.inputs.environment || 'dev' }}-rg
+  AKS_CLUSTER: cnoe-${{ github.event.inputs.environment || 'dev' }}-aks
+  AZURE_REGION: eastus
+
+jobs:
+  validate:
+    name: Validate Infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Azure CLI
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Validate Bicep
+        run: |
+          az bicep build --file infrastructure/azure/bicep/main.bicep
+          echo "✓ Bicep validation successful"
+
+      - name: Install kubeconform
+        run: |
+          curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          chmod +x kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate Kubernetes manifests
+        run: |
+          find infrastructure/kubernetes -name "*.yaml" -exec kubeconform {} \;
+          echo "✓ Kubernetes manifest validation successful"
+
+  deploy-azure:
+    name: Deploy Azure Resources
+    needs: validate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    environment:
+      name: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Bicep Template
+        uses: azure/arm-deploy@v1
+        with:
+          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          scope: subscription
+          region: ${{ env.AZURE_REGION }}
+          template: infrastructure/azure/bicep/main.bicep
+          parameters: environment=${{ github.event.inputs.environment || 'dev' }} prefix=cnoe
+
+      - name: Get AKS Credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --name ${{ env.AKS_CLUSTER }} \
+            --overwrite-existing
+
+      - name: Verify AKS Connection
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+  deploy-argocd:
+    name: Deploy ArgoCD
+    needs: deploy-azure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS Credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --name ${{ env.AKS_CLUSTER }} \
+            --overwrite-existing
+
+      - name: Deploy ArgoCD
+        run: |
+          kubectl apply -k infrastructure/kubernetes/argocd/base
+          
+          # Wait for ArgoCD to be ready
+          kubectl wait --for=condition=available --timeout=300s \
+            deployment/argocd-server -n argocd
+          
+          echo "✓ ArgoCD deployed successfully"
+
+      - name: Deploy Ingress Controller
+        run: |
+          kubectl apply -k infrastructure/kubernetes/ingress
+          echo "✓ Ingress controller deployed"
+
+      - name: Bootstrap GitOps
+        run: |
+          # Update bootstrap.yaml with correct repo URL
+          kubectl apply -f gitops/app-of-apps/bootstrap.yaml
+          echo "✓ GitOps bootstrapped"
+
+  verify:
+    name: Verify Deployment
+    needs: deploy-argocd
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS Credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --name ${{ env.AKS_CLUSTER }} \
+            --overwrite-existing
+
+      - name: Verify Resources
+        run: |
+          echo "Checking ArgoCD pods..."
+          kubectl get pods -n argocd
+          
+          echo "Checking namespaces..."
+          kubectl get namespaces
+          
+          echo "Checking ArgoCD applications..."
+          kubectl get applications -n argocd
+          
+          echo "✓ Verification complete"
+
+      - name: Get ArgoCD Admin Password
+        if: success()
+        run: |
+          echo "ArgoCD Admin Password:"
+          kubectl -n argocd get secret argocd-initial-admin-secret \
+            -o jsonpath="{.data.password}" | base64 -d
+          echo ""

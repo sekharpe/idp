@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cnoe-platform-services
+  namespace: cnoe-platform
+  labels:
+    app: cnoe-platform
+    component: platform-services
+spec:
+  replicas: 1  # Single replica for cost optimization
+  selector:
+    matchLabels:
+      app: cnoe-platform
+      component: platform-services
+  template:
+    metadata:
+      labels:
+        app: cnoe-platform
+        component: platform-services
+    spec:
+      containers:
+      - name: platform-services
+        image: cnoedevacr.azurecr.io/cnoe-platform-services:latest
+        imagePullPolicy: Always
+        ports:
+        - name: api
+          containerPort: 8080
+          protocol: TCP
+        - name: portal
+          containerPort: 8081
+          protocol: TCP
+        - name: docs
+          containerPort: 8082
+          protocol: TCP
+        env:
+        - name: ENVIRONMENT
+          value: "dev"
+        - name: LOG_LEVEL
+          value: "info"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        volumeMounts:
+        - name: config
+          mountPath: /etc/cnoe
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: cnoe-platform-config
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cnoe-platform-services
+  namespace: cnoe-platform
+  labels:
+    app: cnoe-platform
+    component: platform-services
+spec:
+  type: ClusterIP
+  ports:
+  - name: api
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  - name: portal
+    port: 8081
+    targetPort: 8081
+    protocol: TCP
+  - name: docs
+    port: 8082
+    targetPort: 8082
+    protocol: TCP
+  selector:
+    app: cnoe-platform
+    component: platform-services

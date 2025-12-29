@@ -1,0 +1,9 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Location
+metadata:
+  name: cnoe-templates
+  description: CNOE Platform Templates
+spec:
+  type: url
+  targets:
+    - ./azure-vm-basic/template.yaml

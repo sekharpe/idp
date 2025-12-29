@@ -1,0 +1,49 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cnoe-platform-ingress
+  namespace: cnoe-platform
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: portal.cnoe.local  # Update with your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: cnoe-platform-services
+            port:
+              number: 8081
+  - host: api.cnoe.local  # Update with your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: cnoe-platform-services
+            port:
+              number: 8080
+  - host: docs.cnoe.local  # Update with your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: cnoe-platform-services
+            port:
+              number: 8082
+  # Uncomment when you have TLS certificates
+  # tls:
+  # - hosts:
+  #   - portal.cnoe.local
+  #   - api.cnoe.local
+  #   - docs.cnoe.local
+  #   secretName: cnoe-platform-tls

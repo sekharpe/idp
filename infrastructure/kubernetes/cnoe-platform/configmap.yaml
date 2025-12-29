@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cnoe-platform-config
+  namespace: cnoe-platform
+data:
+  platform.yaml: |
+    platform:
+      name: "CNOE Internal Developer Portal"
+      environment: "dev"
+      version: "1.0.0"
+    
+    components:
+      argocd:
+        enabled: true
+        url: "http://argocd-server.argocd.svc.cluster.local"
+      backstage:
+        enabled: false  # Infrastructure ready, not deployed yet
+        namespace: "backstage"
+      catalog:
+        enabled: true
+        autoDiscovery: true
+    
+    integrations:
+      github:
+        enabled: false  # Configure when ready
+      azureDevOps:
+        enabled: false  # Configure when ready
+      kubernetes:
+        enabled: true
+        inCluster: true
+    
+    features:
+      serviceTemplates: true
+      softwareCatalog: true
+      techdocs: true
+      apiDocs: true

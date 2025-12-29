@@ -1,0 +1,186 @@
+# Azure DevOps Pipeline: Create Azure VM from Backstage
+# Triggered by Backstage template with user parameters
+
+trigger: none # Manual/API trigger only
+
+parameters:
+  - name: vm_name
+    displayName: 'Virtual Machine Name'
+    type: string
+  
+  - name: azure_subscription_id
+    displayName: 'Azure Subscription ID'
+    type: string
+  
+  - name: azure_region
+    displayName: 'Azure Region'
+    type: string
+    default: 'eastus'
+  
+  - name: vm_size
+    displayName: 'VM Size'
+    type: string
+    default: 'Standard_B2s'
+  
+  - name: admin_username
+    displayName: 'Admin Username'
+    type: string
+    default: 'azureuser'
+  
+  - name: ssh_public_key
+    displayName: 'SSH Public Key'
+    type: string
+
+variables:
+  terraformVersion: '1.5.0'
+  workingDirectory: '$(System.DefaultWorkingDirectory)/infrastructure/terraform/azure-vm'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  - stage: Validate
+    displayName: 'Validate Terraform'
+    jobs:
+      - job: TerraformValidate
+        displayName: 'Validate Terraform Configuration'
+        steps:
+          - task: TerraformInstaller@0
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: $(terraformVersion)
+          
+          - script: |
+              cd $(workingDirectory)
+              
+              # Create tfvars file from parameters
+              cat > auto.tfvars <<EOF
+              vm_name              = "${{ parameters.vm_name }}"
+              azure_subscription_id = "${{ parameters.azure_subscription_id }}"
+              location             = "${{ parameters.azure_region }}"
+              vm_size              = "${{ parameters.vm_size }}"
+              admin_username       = "${{ parameters.admin_username }}"
+              ssh_public_key       = "${{ parameters.ssh_public_key }}"
+              EOF
+              
+              terraform init
+              terraform validate
+            displayName: 'Initialize and Validate Terraform'
+  
+  - stage: Plan
+    displayName: 'Terraform Plan'
+    dependsOn: Validate
+    jobs:
+      - job: TerraformPlan
+        displayName: 'Generate Terraform Plan'
+        steps:
+          - task: TerraformInstaller@0
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: $(terraformVersion)
+          
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan'
+            inputs:
+              azureSubscription: 'Azure-ServiceConnection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                cd $(workingDirectory)
+                
+                # Create tfvars file
+                cat > auto.tfvars <<EOF
+                vm_name              = "${{ parameters.vm_name }}"
+                azure_subscription_id = "${{ parameters.azure_subscription_id }}"
+                location             = "${{ parameters.azure_region }}"
+                vm_size              = "${{ parameters.vm_size }}"
+                admin_username       = "${{ parameters.admin_username }}"
+                ssh_public_key       = "${{ parameters.ssh_public_key }}"
+                EOF
+                
+                terraform init
+                terraform plan -out=tfplan
+          
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Terraform Plan'
+            inputs:
+              targetPath: '$(workingDirectory)/tfplan'
+              artifact: 'terraform-plan'
+  
+  - stage: Apply
+    displayName: 'Deploy VM'
+    dependsOn: Plan
+    jobs:
+      - deployment: TerraformApply
+        displayName: 'Apply Terraform'
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadPipelineArtifact@2
+                  displayName: 'Download Terraform Plan'
+                  inputs:
+                    artifact: 'terraform-plan'
+                    path: '$(workingDirectory)'
+                
+                - task: TerraformInstaller@0
+                  displayName: 'Install Terraform'
+                  inputs:
+                    terraformVersion: $(terraformVersion)
+                
+                - task: AzureCLI@2
+                  displayName: 'Terraform Apply'
+                  inputs:
+                    azureSubscription: 'Azure-ServiceConnection'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      cd $(workingDirectory)
+                      
+                      # Recreate tfvars for init
+                      cat > auto.tfvars <<EOF
+                      vm_name              = "${{ parameters.vm_name }}"
+                      azure_subscription_id = "${{ parameters.azure_subscription_id }}"
+                      location             = "${{ parameters.azure_region }}"
+                      vm_size              = "${{ parameters.vm_size }}"
+                      admin_username       = "${{ parameters.admin_username }}"
+                      ssh_public_key       = "${{ parameters.ssh_public_key }}"
+                      EOF
+                      
+                      terraform init
+                      terraform apply tfplan
+                      
+                      # Output connection info
+                      echo "==================================="
+                      echo "VM Created Successfully!"
+                      echo "==================================="
+                      terraform output ssh_connection_string
+                      terraform output public_ip_address
+                
+                - script: |
+                    echo "##vso[task.setvariable variable=vm_public_ip;isOutput=true]$(terraform output -raw public_ip_address)"
+                  displayName: 'Export VM Public IP'
+                  workingDirectory: $(workingDirectory)
+
+  - stage: Verify
+    displayName: 'Verify Deployment'
+    dependsOn: Apply
+    jobs:
+      - job: VerifyVM
+        displayName: 'Verify VM is Running'
+        steps:
+          - task: AzureCLI@2
+            displayName: 'Check VM Status'
+            inputs:
+              azureSubscription: 'Azure-ServiceConnection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az vm show \
+                  --resource-group "${{ parameters.vm_name }}-rg" \
+                  --name "${{ parameters.vm_name }}" \
+                  --subscription "${{ parameters.azure_subscription_id }}" \
+                  --show-details \
+                  --query "powerState" \
+                  --output tsv

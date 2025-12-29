@@ -1,0 +1,175 @@
+trigger:
+  branches:
+    include:
+    - main
+    - develop
+  paths:
+    include:
+    - infrastructure/*
+    - gitops/*
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: azure-credentials  # Variable group with Azure connection details
+  - name: resourceGroup
+    value: 'cnoe-$(environment)-rg'
+  - name: aksCluster
+    value: 'cnoe-$(environment)-aks'
+
+stages:
+- stage: Validate
+  displayName: 'Validate Infrastructure'
+  jobs:
+  - job: ValidateBicep
+    displayName: 'Validate Bicep Templates'
+    steps:
+    - task: AzureCLI@2
+      displayName: 'Validate Bicep'
+      inputs:
+        azureSubscription: 'Azure-Connection'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          az bicep build --file infrastructure/azure/bicep/main.bicep
+          echo "Bicep validation successful"
+
+  - job: ValidateKubernetes
+    displayName: 'Validate Kubernetes Manifests'
+    steps:
+    - script: |
+        # Install kubectl
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+        
+        # Install kubeconform for validation
+        curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+        chmod +x kubeconform
+        sudo mv kubeconform /usr/local/bin/
+        
+        # Validate manifests
+        find infrastructure/kubernetes -name "*.yaml" -exec kubeconform {} \;
+      displayName: 'Validate K8s Manifests'
+
+- stage: DeployInfra
+  displayName: 'Deploy Infrastructure'
+  dependsOn: Validate
+  condition: succeeded()
+  jobs:
+  - deployment: DeployAzure
+    displayName: 'Deploy Azure Resources'
+    environment: '$(environment)'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          
+          - task: AzureCLI@2
+            displayName: 'Deploy Bicep Template'
+            inputs:
+              azureSubscription: 'Azure-Connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az deployment sub create \
+                  --location eastus \
+                  --template-file infrastructure/azure/bicep/main.bicep \
+                  --parameters environment=$(environment) prefix=cnoe
+          
+          - task: AzureCLI@2
+            displayName: 'Get AKS Credentials'
+            inputs:
+              azureSubscription: 'Azure-Connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(resourceGroup) \
+                  --name $(aksCluster) \
+                  --overwrite-existing
+
+- stage: DeployK8s
+  displayName: 'Deploy Kubernetes Resources'
+  dependsOn: DeployInfra
+  condition: succeeded()
+  jobs:
+  - deployment: DeployArgoCD
+    displayName: 'Deploy ArgoCD'
+    environment: '$(environment)'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          
+          - task: AzureCLI@2
+            displayName: 'Deploy ArgoCD'
+            inputs:
+              azureSubscription: 'Azure-Connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(resourceGroup) \
+                  --name $(aksCluster) \
+                  --overwrite-existing
+                
+                kubectl apply -k infrastructure/kubernetes/argocd/base
+                
+                # Wait for ArgoCD to be ready
+                kubectl wait --for=condition=available --timeout=300s \
+                  deployment/argocd-server -n argocd
+                
+                echo "ArgoCD deployed successfully"
+          
+          - task: Kubernetes@1
+            displayName: 'Deploy Ingress Controller'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: 'Azure-Connection'
+              azureResourceGroup: '$(resourceGroup)'
+              kubernetesCluster: '$(aksCluster)'
+              command: 'apply'
+              arguments: '-k infrastructure/kubernetes/ingress'
+          
+          - task: Kubernetes@1
+            displayName: 'Bootstrap GitOps'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: 'Azure-Connection'
+              azureResourceGroup: '$(resourceGroup)'
+              kubernetesCluster: '$(aksCluster)'
+              command: 'apply'
+              arguments: '-f gitops/app-of-apps/bootstrap.yaml'
+
+- stage: Verify
+  displayName: 'Verify Deployment'
+  dependsOn: DeployK8s
+  condition: succeeded()
+  jobs:
+  - job: VerifyResources
+    displayName: 'Verify Resources'
+    steps:
+    - task: AzureCLI@2
+      displayName: 'Verify Deployment'
+      inputs:
+        azureSubscription: 'Azure-Connection'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          az aks get-credentials \
+            --resource-group $(resourceGroup) \
+            --name $(aksCluster) \
+            --overwrite-existing
+          
+          echo "Checking ArgoCD..."
+          kubectl get pods -n argocd
+          
+          echo "Checking namespaces..."
+          kubectl get namespaces
+          
+          echo "Checking ArgoCD applications..."
+          kubectl get applications -n argocd

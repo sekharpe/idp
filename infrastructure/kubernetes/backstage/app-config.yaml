@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backstage-app-config
+  namespace: backstage
+data:
+  app-config.production.yaml: |
+    app:
+      title: CNOE Internal Developer Portal
+      baseUrl: http://backstage.cnoe.local
+      
+    organization:
+      name: Your Organization
+      
+    backend:
+      baseUrl: http://backstage.cnoe.local
+      listen:
+        port: 7007
+      csp:
+        connect-src: ["'self'", 'http:', 'https:']
+      cors:
+        origin: http://backstage.cnoe.local
+        methods: [GET, POST, PUT, DELETE]
+        credentials: true
+      database:
+        client: pg
+        connection:
+          host: ${POSTGRES_HOST}
+          port: ${POSTGRES_PORT}
+          user: ${POSTGRES_USER}
+          password: ${POSTGRES_PASSWORD}
+          database: backstage
+      
+    integrations:
+      azure:
+        - host: dev.azure.com
+          # Configure Azure DevOps integration
+          # token: ${AZURE_DEVOPS_TOKEN}
+      github:
+        - host: github.com
+          # Configure GitHub integration
+          # token: ${GITHUB_TOKEN}
+    
+    proxy:
+      '/argocd/api':
+        target: http://argocd-server.argocd.svc.cluster.local
+        changeOrigin: true
+        secure: false
+    
+    techdocs:
+      builder: 'local'
+      generator:
+        runIn: 'local'
+      publisher:
+        type: 'local'
+    
+    auth:
+      environment: development
+      providers:
+        guest:
+          dangerouslyAllowOutsideDevelopment: true
+        # Configure Azure AD or GitHub OAuth when ready
+        # microsoft:
+        #   development:
+        #     clientId: ${AUTH_MICROSOFT_CLIENT_ID}
+        #     clientSecret: ${AUTH_MICROSOFT_CLIENT_SECRET}
+        #     tenantId: ${AUTH_MICROSOFT_TENANT_ID}
+    
+    scaffolder:
+      defaultAuthor:
+        name: CNOE Platform
+        email: platform@example.com
+      defaultCommitMessage: 'Initial commit from CNOE Platform'
+    
+    catalog:
+      import:
+        entityFilename: catalog-info.yaml
+        pullRequestBranchName: backstage-integration
+      rules:
+        - allow: [Component, System, API, Resource, Location, Template]
+      locations:
+        # Register templates from this repo
+        - type: url
+          target: https://github.com/your-org/idp/blob/main/backstage/templates/all-templates.yaml
+          rules:
+            - allow: [Template]
+        
+        # Example: Register services from Azure DevOps
+        # - type: azure-discovery
+        #   target: https://dev.azure.com/your-org/your-project
+        
+        # Example: Register services from GitHub
+        # - type: url
+        #   target: https://github.com/your-org/*/blob/-/catalog-info.yaml
+        #   rules:
+        #     - allow: [Component, System, API]
+    
+    kubernetes:
+      serviceLocatorMethod:
+        type: 'multiTenant'
+      clusterLocatorMethods:
+        - type: 'config'
+          clusters:
+            - url: https://kubernetes.default.svc
+              name: local-cluster
+              authProvider: 'serviceAccount'
+              skipTLSVerify: false
+              skipMetricsLookup: false
