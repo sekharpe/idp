@@ -20,8 +20,12 @@ spec:
     spec:
       containers:
       - name: platform-services
-        image: cnoedevacr.azurecr.io/cnoe-platform-services:latest
-        imagePullPolicy: Always
+        image: cnoe-platform-services:latest
+        imagePullPolicy: Never
+        securityContext:
+          runAsUser: 1001      # UID of non-root user in Dockerfile
+          runAsGroup: 1001     # GID of non-root user in Dockerfile
+          allowPrivilegeEscalation: false
         ports:
         - name: api
           containerPort: 8080

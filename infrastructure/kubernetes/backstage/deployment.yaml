@@ -21,11 +21,11 @@ spec:
       serviceAccountName: backstage
       containers:
       - name: backstage
-        image: spotify/backstage:latest
+        image: roadiehq/community-backstage-image:latest
         imagePullPolicy: IfNotPresent
         ports:
         - name: http
-          containerPort: 7007
+          containerPort: 7000
           protocol: TCP
         env:
         - name: POSTGRES_HOST
@@ -59,7 +59,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /healthcheck
-            port: 7007
+            port: 7000
           initialDelaySeconds: 60
           periodSeconds: 30
           timeoutSeconds: 10
@@ -67,7 +67,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /healthcheck
-            port: 7007
+            port: 7000
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
@@ -89,8 +89,8 @@ spec:
   type: ClusterIP
   ports:
   - name: http
-    port: 7007
-    targetPort: 7007
+    port: 7000
+    targetPort: 7000
     protocol: TCP
   selector:
     app: backstage
@@ -116,7 +116,7 @@ spec:
           service:
             name: backstage
             port:
-              number: 7007
+              number: 7000
   # Uncomment when you have TLS certificates
   # tls:
   # - hosts:
