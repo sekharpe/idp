@@ -1,0 +1,9 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: idp
+  description: Find your internal developer portal
+spec:
+  type: service
+  lifecycle: production
+  owner: idp-team
