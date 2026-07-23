@@ -4,6 +4,6 @@ metadata:
   name: idp
   description: Find your internal developer portal
 spec:
-  type: service
+  type: Service
   lifecycle: production
   owner: idp-team
